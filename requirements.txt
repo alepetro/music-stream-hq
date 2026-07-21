@@ -1,0 +1,4 @@
+pyTelegramBotAPI>=4.20.0
+yt-dlp>=2025.1.1
+requests>=2.31.0
+shazamio
