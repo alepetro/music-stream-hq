@@ -1,0 +1,11 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "pytelegrambotapi>=4.36.0",
+    "requests>=2.34.2",
+    "shazamio>=0.8.1",
+    "yt-dlp>=2026.7.4",
+]
