@@ -2517,7 +2517,7 @@ if __name__ == "__main__":
             #opts = {
                 #**_ydl_opts_base(),
                # "skip_download": True,
-            }
+            #}
             #with yt_dlp.YoutubeDL(opts) as ydl:
                 #ydl.extract_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ", download=False)
             #log.info("yt-dlp prewarm done in %.1fs", time.time() - _t)
