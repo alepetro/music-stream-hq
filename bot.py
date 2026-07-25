@@ -825,6 +825,7 @@ def _ydl_opts_base() -> dict:
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 15,
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
         **YDL_EXTRACTOR_ARGS,
     }
 
