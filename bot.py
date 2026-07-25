@@ -2510,21 +2510,21 @@ if __name__ == "__main__":
     except Exception as _exc:
         log.error("premium cache prewarm failed: %s", _exc)
 
-    def _prewarm_ytdlp():
-        """Solve YouTube JS challenge at startup so the first user doesn't wait."""
-        try:
-            _t = time.time()
-            opts = {
-                **_ydl_opts_base(),
-                "skip_download": True,
+    #def _prewarm_ytdlp():
+       # """Solve YouTube JS challenge at startup so the first user doesn't wait."""
+        #try:
+            #_t = time.time()
+            #opts = {
+                #**_ydl_opts_base(),
+               # "skip_download": True,
             }
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.extract_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ", download=False)
-            log.info("yt-dlp prewarm done in %.1fs", time.time() - _t)
-        except Exception as exc:
-            log.warning("yt-dlp prewarm failed (non-fatal): %s", exc)
+            #with yt_dlp.YoutubeDL(opts) as ydl:
+                #ydl.extract_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ", download=False)
+            #log.info("yt-dlp prewarm done in %.1fs", time.time() - _t)
+        #except Exception as exc:
+            #log.warning("yt-dlp prewarm failed (non-fatal): %s", exc)
 
-    threading.Thread(target=_prewarm_ytdlp, daemon=True, name="yt-prewarm").start()
+    #threading.Thread(target=_prewarm_ytdlp, daemon=True, name="yt-prewarm").start()
     log.info("Bot polling started...")
     while True:
         try:
