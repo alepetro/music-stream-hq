@@ -814,10 +814,85 @@ def t(user_id: int, key: str) -> str:
     return strings.get(key, LANGUAGES["en"].get(key, key))
 
 # ---------------------------------------------------------------------------
-# FIX 2: yt-dlp helpers — iOS client for YouTube bot detection bypass
+# FIX 2: yt-dlp helpers — iOS client + Invidious fallback
 # ---------------------------------------------------------------------------
 
 MAX_TRACK_SECONDS = 1200
+
+# Invidious instances used when YouTube blocks the Railway IP directly.
+# Rotated automatically; the first one that responds wins.
+INVIDIOUS_HOSTS = [
+    "https://iv.datura.network",
+    "https://iv.nboeck.de",
+    "https://yt.artemislena.eu",
+    "https://iv.melmac.space",
+    "https://y.com.sb",
+    "https://vid.puffyan.us",
+]
+
+
+def _invidious_request(path: str, params: dict | None = None, timeout: int = 12) -> dict | None:
+    """Try a set of public Invidious mirrors until one answers."""
+    qs = ""
+    if params:
+        qs = "?" + "&".join(f"{k}={requests.utils.quote(str(v))}" for k, v in params.items())
+    for host in INVIDIOUS_HOSTS:
+        try:
+            resp = requests.get(f"{host}{path}{qs}", timeout=timeout, headers={
+                "User-Agent": YDL_HTTP_HEADERS["User-Agent"],
+                "Accept": "application/json",
+            })
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as exc:
+            log.debug("Invidious mirror %s failed: %s", host, exc)
+    return None
+
+
+def _search_invidious(query: str, max_results: int = SEARCH_POOL) -> list[dict]:
+    data = _invidious_request("/api/v1/search", {"q": query, "type": "video"})
+    if not isinstance(data, list):
+        return []
+    results = []
+    for item in data[:max_results]:
+        if item.get("type") != "video":
+            continue
+        vid = item.get("videoId")
+        if not vid or len(vid) != 11:
+            continue
+        results.append({
+            "id": vid,
+            "url": f"https://www.youtube.com/watch?v={vid}",
+            "title": item.get("title", "Unknown"),
+            "uploader": item.get("author", "Unknown"),
+            "duration": item.get("lengthSeconds", 0) or 0,
+            "thumbnail": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+        })
+    return results
+
+
+def _invidious_audio_url(video_id: str) -> tuple[str | None, dict]:
+    """Return the best audio URL from Invidious + metadata."""
+    data = _invidious_request(f"/api/v1/videos/{video_id}")
+    if not data or not isinstance(data, dict):
+        return None, {}
+    best = None
+    for fmt in data.get("adaptiveFormats", []):
+        if not fmt.get("url") or not str(fmt.get("type", "")).startswith("audio/"):
+            continue
+        # Prefer higher bitrate, fallback to any audio
+        br = fmt.get("bitrate", 0) or 0
+        if best is None or br > best.get("bitrate", 0):
+            best = fmt
+    if not best:
+        return None, {}
+    return best["url"], {
+        "video_id": video_id,
+        "title": data.get("title", "Unknown"),
+        "performer": data.get("author", "Unknown"),
+        "duration": int(data.get("lengthSeconds", 0) or 0),
+        "thumbnail": data.get("videoThumbnails", [{}])[0].get("url", f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"),
+    }
 
 EQ_FILTER = (
     "highpass=f=25,"
@@ -932,7 +1007,16 @@ def search_youtube(query: str, max_results: int = SEARCH_POOL) -> list[dict]:
             log.warning("SoundCloud fallback failed: %s", exc)
 
     if not results and last_exc:
-        log.error("All search clients failed for query=%r: %s", query[:40], last_exc)
+        log.warning("All yt-dlp search clients failed for query=%r: %s", query[:40], last_exc)
+
+    if not results:
+        # Fallback: Invidious mirrors (public YouTube front-ends) bypass IP blocks.
+        try:
+            results = _search_invidious(query, max_results)
+            if results:
+                log.info("Invidious search succeeded for query=%r", query[:40])
+        except Exception as exc:
+            log.warning("Invidious search failed: %s", exc)
 
     if results:
         with _search_cache_lock:
@@ -1066,6 +1150,40 @@ def download_audio(video_url: str) -> tuple[str | None, dict]:
             common_opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
 
     shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # Fallback: Invidious direct audio URL (bypasses YouTube IP blocks entirely)
+    video_id = None
+    m = re.search(r"(?:v=|/)([0-9A-Za-z_-]{11})", video_url)
+    if m:
+        video_id = m.group(1)
+    if video_id:
+        try:
+            audio_url, meta = _invidious_audio_url(video_id)
+            if audio_url and meta:
+                tmpdir = tempfile.mkdtemp(prefix="musicbot_")
+                raw_path = os.path.join(tmpdir, f"{video_id}.audio")
+                with requests.get(audio_url, stream=True, timeout=60) as r:
+                    r.raise_for_status()
+                    with open(raw_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+                out = os.path.join(tmpdir, f"{video_id}.mp3")
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", raw_path, "-af", EQ_FILTER, "-compression_level", "9", out],
+                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                log.info("Invidious download succeeded for %s", video_url)
+                return out, {
+                    "video_id": meta.get("video_id", video_id),
+                    "title": meta.get("title", "Unknown"),
+                    "performer": meta.get("performer", "Unknown"),
+                    "duration": int(meta.get("duration", 0) or 0),
+                    "thumbnail": meta.get("thumbnail", ""),
+                }
+        except Exception as exc:
+            log.warning("Invidious download failed for %s: %s", video_url, exc)
+
     if last_exc:
         log.error("All download clients failed for %s: %s", video_url, last_exc)
     return None, {}
@@ -2630,7 +2748,19 @@ if __name__ == "__main__":
         log.error("premium cache prewarm failed: %s", _exc)
 
     def _prewarm_ytdlp():
-        """Solve YouTube JS challenge at startup so the first user doesn't wait."""
+        """Warm up YouTube/Invidious paths at startup so the first user doesn't wait."""
+        # First, try a simple Invidious request to ensure the fallback network works.
+        try:
+            _t = time.time()
+            _meta = _invidious_request("/api/v1/videos/dQw4w9WgXcQ")
+            if _meta:
+                log.info("Invidious prewarm done in %.1fs", time.time() - _t)
+            else:
+                log.warning("Invidious prewarm returned no data")
+        except Exception as exc:
+            log.warning("Invidious prewarm failed (non-fatal): %s", exc)
+
+        # Second, try yt-dlp directly with a generic music video that is less likely blocked.
         try:
             _t = time.time()
             opts = {
@@ -2638,10 +2768,10 @@ if __name__ == "__main__":
                 "skip_download": True,
             }
             with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.extract_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ", download=False)
-            log.info("yt-dlp prewarm done in %.1fs", time.time() - _t)
+                ydl.extract_info("https://www.youtube.com/watch?v=9bZkp7q19f0", download=False)
+            log.info("yt-dlp direct prewarm done in %.1fs", time.time() - _t)
         except Exception as exc:
-            log.warning("yt-dlp prewarm failed (non-fatal): %s", exc)
+            log.warning("yt-dlp direct prewarm failed (non-fatal): %s", exc)
 
     threading.Thread(target=_prewarm_ytdlp, daemon=True, name="yt-prewarm").start()
     log.info("Bot polling started...")
