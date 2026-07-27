@@ -47,16 +47,33 @@ BTN_PREV, BTN_CLOSE, BTN_NEXT = "⬅️", "❌", "➡️"
 # ---------------------------------------------------------------------------
 # FIX 1: YouTube bot detection bypass (2025-2026)
 # ---------------------------------------------------------------------------
-# YouTube now requires PO token / newer client. Using "ios" client is the
-# most reliable way to bypass bot detection without cookies in 2025-2026.
-# Fallback chain: ios → web_embedded → mweb → tv_embedded
+# YouTube aggressively blocks datacenter IPs. The most reliable public
+# workarounds in 2026 are: iOS client + mobile UA + retries + skipping the
+# heavy JS player path. If everything fails, we rotate through the full client
+# list. Cookies/PO tokens are NOT required for the iOS client path.
 YDL_EXTRACTOR_ARGS = {
     "extractor_args": {
         "youtube": {
-            "player_client": ["ios", "web_embedded", "mweb"],
-            "player_skip": [],
+            "player_client": ["ios", "web_embedded", "mweb", "tv_embedded"],
+            "player_skip": ["webpage", "configs", "js"],
+            "player_params": {
+                "hl": "en",
+                "gl": "US",
+                "client_screen": "EMBED",
+            },
         }
     }
+}
+
+# Modern web requests must look like a real mobile browser
+YDL_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.youtube.com/",
 }
 
 # Legacy JS runtimes kept as secondary fallback
@@ -820,11 +837,20 @@ SEARCH_CACHE_MAX = 500
 
 
 def _ydl_opts_base() -> dict:
-    """Base yt-dlp options with iOS client to bypass YouTube bot detection."""
+    """Base yt-dlp options with iOS client + mobile UA + retries."""
     return {
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 15,
+        "retries": 10,
+        "fragment_retries": 10,
+        "extractor_retries": 10,
+        "retry_sleep_functions": {"http": lambda n: 2 + n, "fragment": lambda n: 2 + n},
+        "file_access_retries": 5,
+        "geo_bypass": True,
+        "ignoreerrors": False,
+        "headers": YDL_HTTP_HEADERS,
+        **YDL_JS_RUNTIMES,
         **YDL_EXTRACTOR_ARGS,
     }
 
@@ -837,34 +863,57 @@ def search_youtube(query: str, max_results: int = SEARCH_POOL) -> list[dict]:
         if hit and now - hit["ts"] < SEARCH_CACHE_TTL:
             return hit["results"]
 
-    opts = {
-        **_ydl_opts_base(),
-        "extract_flat": True,
-        "skip_download": True,
-        "noplaylist": True,
-    }
+    base_opts = _ydl_opts_base()
     results = []
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        try:
-            info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
-            for entry in info.get("entries", []):
-                if not entry or not entry.get("id"):
-                    continue
-                if len(entry["id"]) != 11:
-                    continue
-                results.append({
-                    "id": entry["id"],
-                    "url": f"https://www.youtube.com/watch?v={entry['id']}",
-                    "title": entry.get("title", "Unknown"),
-                    "uploader": entry.get("uploader") or entry.get("channel") or "Unknown",
-                    "duration": entry.get("duration") or 0,
-                    "thumbnail": f"https://i.ytimg.com/vi/{entry['id']}/mqdefault.jpg",
-                })
-        except Exception as exc:
-            log.warning("YouTube search failed: %s", exc)
+    last_exc = None
 
-        if not results:
-            try:
+    # Try each client separately; iOS is usually the most resilient, but IPs
+    # that Google has already flagged may need web_embedded or tv_embedded.
+    client_chain = ["ios", "web_embedded", "mweb", "tv_embedded"]
+    for client in client_chain:
+        if results:
+            break
+        opts = {
+            **base_opts,
+            "extract_flat": True,
+            "skip_download": True,
+            "noplaylist": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": [client],
+                    "player_skip": ["webpage", "configs", "js"],
+                    "player_params": {"hl": "en", "gl": "US", "client_screen": "EMBED"},
+                }
+            },
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
+                for entry in (info or {}).get("entries", []):
+                    if not entry or not entry.get("id"):
+                        continue
+                    if len(entry["id"]) != 11:
+                        continue
+                    results.append({
+                        "id": entry["id"],
+                        "url": f"https://www.youtube.com/watch?v={entry['id']}",
+                        "title": entry.get("title", "Unknown"),
+                        "uploader": entry.get("uploader") or entry.get("channel") or "Unknown",
+                        "duration": entry.get("duration") or 0,
+                        "thumbnail": f"https://i.ytimg.com/vi/{entry['id']}/mqdefault.jpg",
+                    })
+            if results:
+                log.info("YouTube search succeeded with client=%s for query=%r", client, query[:40])
+                break
+        except Exception as exc:
+            last_exc = exc
+            log.warning("YouTube search client=%s failed: %s", client, exc)
+
+    if not results:
+        # Fallback: SoundCloud search
+        opts = {**base_opts, "extract_flat": True, "skip_download": True, "noplaylist": True}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 sc = ydl.extract_info(f"scsearch15:{query}", download=False)
                 for entry in (sc or {}).get("entries", []):
                     if not entry or not entry.get("url"):
@@ -877,8 +926,13 @@ def search_youtube(query: str, max_results: int = SEARCH_POOL) -> list[dict]:
                         "duration": int(entry.get("duration") or 0),
                         "thumbnail": (entry.get("thumbnails") or [{}])[-1].get("url", ""),
                     })
-            except Exception as exc:
-                log.warning("SoundCloud fallback failed: %s", exc)
+            if results:
+                log.info("SoundCloud fallback succeeded for query=%r", query[:40])
+        except Exception as exc:
+            log.warning("SoundCloud fallback failed: %s", exc)
+
+    if not results and last_exc:
+        log.error("All search clients failed for query=%r: %s", query[:40], last_exc)
 
     if results:
         with _search_cache_lock:
@@ -907,15 +961,43 @@ def get_audio_stream_url(video_url: str) -> dict | None:
                 "video_id": info.get("id", ""),
             }
     except Exception as exc:
-        log.warning("Stream extraction failed: %s", exc)
-        return None
+        log.warning("Stream extraction failed (primary): %s", exc)
+
+    # Retry with the web_embedded client (often works when iOS is blocked)
+    for client in ("web_embedded", "tv_embedded"):
+        opts = {
+            **_ydl_opts_base(),
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "skip_download": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": [client],
+                    "player_skip": ["webpage", "configs", "js"],
+                    "player_params": {"hl": "en", "gl": "US", "client_screen": "EMBED"},
+                }
+            },
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(video_url, download=False)
+                log.info("Stream extraction succeeded with client=%s", client)
+                return {
+                    "audio_url": info.get("url") or "",
+                    "title": info.get("title", "Unknown"),
+                    "uploader": info.get("uploader") or info.get("channel") or "Unknown",
+                    "duration": info.get("duration") or 0,
+                    "video_id": info.get("id", ""),
+                }
+        except Exception as exc:
+            log.warning("Stream extraction client=%s failed: %s", client, exc)
+    return None
 
 
 def download_audio(video_url: str) -> tuple[str | None, dict]:
     tmpdir = tempfile.mkdtemp(prefix="musicbot_")
-    opts = {
-        **_ydl_opts_base(),
-        "format": "bestaudio/best",
+    base_opts = _ydl_opts_base()
+    common_opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
         "outtmpl": os.path.join(tmpdir, "%(title)s.%(ext)s"),
         "postprocessors": [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "320"},
@@ -928,26 +1010,64 @@ def download_audio(video_url: str) -> tuple[str | None, dict]:
         "noplaylist": True,
         "match_filter": yt_dlp.utils.match_filter_func(f"duration<={MAX_TRACK_SECONDS}"),
     }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-        if info and info.get("entries") is not None:
-            info = info["entries"][0] if info["entries"] else None
-        if info and int(info.get("duration") or 0) > MAX_TRACK_SECONDS:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            return None, {"error": "too_long"}
-        for f in Path(tmpdir).iterdir():
-            if f.suffix.lower() == ".mp3":
-                return str(f), {
-                    "video_id": info.get("id", ""),
-                    "title": info.get("title", "Unknown"),
-                    "performer": info.get("uploader") or info.get("channel") or "Unknown",
-                    "duration": int(info.get("duration") or 0),
-                    "thumbnail": info.get("thumbnail") or "",
+
+    last_exc = None
+    clients = ["ios", "web_embedded", "mweb", "tv_embedded"]
+    for client in clients:
+        opts = {
+            **base_opts,
+            **common_opts,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": [client],
+                    "player_skip": ["webpage", "configs", "js"],
+                    "player_params": {"hl": "en", "gl": "US", "client_screen": "EMBED"},
                 }
-    except Exception as exc:
-        log.error("Download error for %s: %s", video_url, exc)
-        shutil.rmtree(tmpdir, ignore_errors=True)
+            },
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+            if info and info.get("entries") is not None:
+                info = info["entries"][0] if info["entries"] else None
+            if info and int(info.get("duration") or 0) > MAX_TRACK_SECONDS:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return None, {"error": "too_long"}
+            for f in Path(tmpdir).iterdir():
+                if f.suffix.lower() == ".mp3":
+                    log.info("Download succeeded with client=%s for %s", client, video_url)
+                    return str(f), {
+                        "video_id": info.get("id", ""),
+                        "title": info.get("title", "Unknown"),
+                        "performer": info.get("uploader") or info.get("channel") or "Unknown",
+                        "duration": int(info.get("duration") or 0),
+                        "thumbnail": info.get("thumbnail") or "",
+                    }
+            # If yt-dlp wrote a different extension, convert it to mp3
+            for f in Path(tmpdir).iterdir():
+                if f.is_file() and f.suffix.lower() in (".m4a", ".webm", ".ogg", ".mp4"):
+                    out = f.with_suffix(".mp3")
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", str(f), "-af", EQ_FILTER, "-compression_level", "9", str(out)],
+                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    return str(out), {
+                        "video_id": info.get("id", ""),
+                        "title": info.get("title", "Unknown"),
+                        "performer": info.get("uploader") or info.get("channel") or "Unknown",
+                        "duration": int(info.get("duration") or 0),
+                        "thumbnail": info.get("thumbnail") or "",
+                    }
+        except Exception as exc:
+            last_exc = exc
+            log.warning("Download client=%s failed for %s: %s", client, video_url, exc)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            tmpdir = tempfile.mkdtemp(prefix="musicbot_")
+            common_opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    if last_exc:
+        log.error("All download clients failed for %s: %s", video_url, last_exc)
     return None, {}
 
 
