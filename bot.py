@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Studio-quality multi-language Telegram Music Bot
-Fixed version: YouTube bot detection bypass, promo video fallback, support button restored.
+Fixed version: YouTube cookies + bot-detection bypass.
 """
 
+import base64
 import html
 import os
 import queue
@@ -47,22 +48,57 @@ BTN_PREV, BTN_CLOSE, BTN_NEXT = "⬅️", "❌", "➡️"
 # ---------------------------------------------------------------------------
 # YouTube extraction (2026)
 # ---------------------------------------------------------------------------
-# YouTube regularly changes its player challenge.  The embedded clients avoid
-# needing a per-request PO token in most cases, while yt-dlp-ejs + Node solves
-# the current signature / n challenges.  Keep the client order explicit: iOS
-# is a useful fallback when the web clients are rate limited.
+# YouTube blocks unauthenticated server IPs.  The most reliable fix is to
+# supply cookies exported from a real browser account via the YOUTUBE_COOKIES
+# secret (Netscape cookies.txt format, optionally base64-encoded).
+# Without cookies, embedded clients + Node JS solver are tried as fallback.
+#
+# How to get cookies:
+#   1. Install "Get cookies.txt LOCALLY" in Chrome/Firefox.
+#   2. Go to youtube.com while logged in, click the extension, export.
+#   3. Paste the file content into Replit Secrets as YOUTUBE_COOKIES.
+
+_YT_COOKIES_FILE: str | None = None
+
+def _setup_yt_cookies() -> None:
+    """Write YOUTUBE_COOKIES env var to a temp file once at startup."""
+    global _YT_COOKIES_FILE
+    raw = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    if not raw:
+        # Also check for a file committed alongside the bot
+        local = os.path.join(os.path.dirname(__file__), "youtube_cookies.txt")
+        if os.path.isfile(local):
+            _YT_COOKIES_FILE = local
+            log.info("YouTube cookies loaded from youtube_cookies.txt")
+        else:
+            log.warning("YOUTUBE_COOKIES secret not set — YouTube downloads may fail on server IPs.")
+        return
+    # Decode base64 if necessary
+    try:
+        decoded = base64.b64decode(raw).decode("utf-8")
+        if decoded.startswith("# Netscape") or "\tyoutube.com\t" in decoded or ".youtube.com\t" in decoded:
+            raw = decoded
+    except Exception:
+        pass
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix="_yt_cookies.txt",
+                                      delete=False, prefix="musicbot_")
+    tmp.write(raw)
+    tmp.close()
+    _YT_COOKIES_FILE = tmp.name
+    log.info("YouTube cookies written to %s", _YT_COOKIES_FILE)
+
+# Clients to try for audio extraction.
+# With cookies, the plain web client works reliably.
+# Without cookies, embedded clients are less likely to hit bot checks.
 YDL_EXTRACTOR_ARGS = {
     "extractor_args": {
         "youtube": {
-            "player_client": ["web_embedded", "mweb", "ios"],
+            "player_client": ["web", "web_embedded", "mweb", "ios"],
             "player_skip": [],
         }
     }
 }
 
-# yt-dlp only uses this when it is included in the options passed to
-# YoutubeDL.  Node is present in the Replit runtime and yt-dlp-ejs, installed
-# through requirements.txt, provides the challenge solver distribution.
 YDL_JS_RUNTIMES = {"js_runtimes": {"node": {}}}
 
 # ---------------------------------------------------------------------------
@@ -824,13 +860,16 @@ SEARCH_CACHE_MAX = 500
 
 def _ydl_opts_base() -> dict:
     """Base yt-dlp options for YouTube search and audio extraction."""
-    return {
+    opts: dict = {
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 15,
         **YDL_EXTRACTOR_ARGS,
         **YDL_JS_RUNTIMES,
     }
+    if _YT_COOKIES_FILE:
+        opts["cookiefile"] = _YT_COOKIES_FILE
+    return opts
 
 
 def search_youtube(query: str, max_results: int = SEARCH_POOL) -> list[dict]:
@@ -2493,6 +2532,7 @@ if __name__ == "__main__":
 
     init_db()
     setup_command_panel()
+    _setup_yt_cookies()
 
     for _attempt in range(6):
         try:
