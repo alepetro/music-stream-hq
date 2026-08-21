@@ -5,6 +5,7 @@ Fixed version: YouTube cookies + bot-detection bypass.
 """
 
 import base64
+import glob
 import html
 import os
 import queue
@@ -48,15 +49,35 @@ BTN_PREV, BTN_CLOSE, BTN_NEXT = "⬅️", "❌", "➡️"
 # ---------------------------------------------------------------------------
 # YouTube extraction (2026)
 # ---------------------------------------------------------------------------
-# YouTube blocks unauthenticated server IPs.  The most reliable fix is to
-# supply cookies exported from a real browser account via the YOUTUBE_COOKIES
-# secret (Netscape cookies.txt format, optionally base64-encoded).
-# Without cookies, embedded clients + Node JS solver are tried as fallback.
+# YouTube blocks unauthenticated server IPs.  Two complementary fixes:
 #
-# How to get cookies:
-#   1. Install "Get cookies.txt LOCALLY" in Chrome/Firefox.
-#   2. Go to youtube.com while logged in, click the extension, export.
-#   3. Paste the file content into Replit Secrets as YOUTUBE_COOKIES.
+# 1. NODE PATH — yt-dlp-ejs uses Node.js to solve YouTube's JS player
+#    challenges.  In Replit deployments Node may live in the Nix store and
+#    not be on PATH by default; we detect it at startup and add it.
+#
+# 2. COOKIES — authenticated requests bypass bot-detection entirely.
+#    Set the YOUTUBE_COOKIES secret (Netscape cookies.txt format, optionally
+#    base64-encoded) and the bot will use it automatically.
+
+def _setup_node_path() -> None:
+    """Ensure Node.js is in PATH so yt-dlp-ejs can solve JS challenges."""
+    if shutil.which("node"):
+        log.info("Node.js already in PATH: %s", shutil.which("node"))
+        return
+    # Search Nix store (Replit) and standard Linux paths
+    candidates = (
+        sorted(glob.glob("/nix/store/*nodejs*wrapped*/bin/node"))
+        + sorted(glob.glob("/nix/store/*nodejs*/bin/node"))
+        + ["/usr/local/bin/node", "/usr/bin/node", "/opt/nodejs/bin/node"]
+    )
+    for candidate in candidates:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            node_dir = os.path.dirname(candidate)
+            os.environ["PATH"] = node_dir + ":" + os.environ.get("PATH", "")
+            log.info("Added Node.js to PATH from Nix store: %s", candidate)
+            return
+    log.warning("Node.js not found — YouTube JS challenge solving may be unavailable.")
+
 
 _YT_COOKIES_FILE: str | None = None
 
@@ -65,13 +86,12 @@ def _setup_yt_cookies() -> None:
     global _YT_COOKIES_FILE
     raw = os.environ.get("YOUTUBE_COOKIES", "").strip()
     if not raw:
-        # Also check for a file committed alongside the bot
         local = os.path.join(os.path.dirname(__file__), "youtube_cookies.txt")
         if os.path.isfile(local):
             _YT_COOKIES_FILE = local
             log.info("YouTube cookies loaded from youtube_cookies.txt")
         else:
-            log.warning("YOUTUBE_COOKIES secret not set — YouTube downloads may fail on server IPs.")
+            log.warning("YOUTUBE_COOKIES secret not set — downloads may fail on server IPs.")
         return
     # Decode base64 if necessary
     try:
@@ -88,8 +108,8 @@ def _setup_yt_cookies() -> None:
     log.info("YouTube cookies written to %s", _YT_COOKIES_FILE)
 
 # Clients to try for audio extraction.
-# With cookies, the plain web client works reliably.
-# Without cookies, embedded clients are less likely to hit bot checks.
+# With cookies the web client is reliable; embedded clients are the best
+# unauthenticated option since they are less aggressively rate-limited.
 YDL_EXTRACTOR_ARGS = {
     "extractor_args": {
         "youtube": {
@@ -2532,6 +2552,7 @@ if __name__ == "__main__":
 
     init_db()
     setup_command_panel()
+    _setup_node_path()
     _setup_yt_cookies()
 
     for _attempt in range(6):
