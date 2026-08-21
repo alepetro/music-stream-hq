@@ -2,5 +2,6 @@ pyTelegramBotAPI
 # Installs yt-dlp together with yt-dlp-ejs. The latter lets Node solve
 # YouTube's current JavaScript player challenges.
 yt-dlp[default]>=2026.08.19
+ytmusicapi>=1.12.2
 shazamio
 requests
