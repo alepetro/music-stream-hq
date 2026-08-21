@@ -5,6 +5,7 @@ Fixed version: YouTube cookies + bot-detection bypass.
 """
 
 import base64
+import functools
 import glob
 import html
 import os
@@ -25,6 +26,7 @@ import requests
 import telebot
 from telebot import types
 import yt_dlp
+from ytmusicapi import YTMusic
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -232,7 +234,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ Scarico la traccia...",
         "sending": "📤 Invio in corso...",
         "not_found": "❌ Nessun risultato trovato.",
-        "too_long": "❌ Traccia troppo lunga (max 20 min).",
+        "too_long": "❌ Traccia troppo lunga (max 10 min).",
         "lyrics_not_found": "❌ Testo non trovato.",
         "choose_lang": "🌍 Scegli la tua lingua:",
         "lang_set": "✅ Lingua impostata su Italiano 🇮🇹",
@@ -257,7 +259,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ Downloading track...",
         "sending": "📤 Sending...",
         "not_found": "❌ No results found.",
-        "too_long": "❌ Track too long (max 20 min).",
+        "too_long": "❌ Track too long (max 10 min).",
         "lyrics_not_found": "❌ Lyrics not found.",
         "choose_lang": "🌍 Choose your language:",
         "lang_set": "✅ Language set to English 🇬🇧",
@@ -282,7 +284,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ Descargando pista...",
         "sending": "📤 Enviando...",
         "not_found": "❌ No se encontraron resultados.",
-        "too_long": "❌ Pista demasiado larga (máx. 20 min).",
+        "too_long": "❌ Pista demasiado larga (máx. 10 min).",
         "lyrics_not_found": "❌ Letra no encontrada.",
         "choose_lang": "🌍 Elige tu idioma:",
         "lang_set": "✅ Idioma configurado a Español 🇪🇸",
@@ -307,7 +309,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ Téléchargement...",
         "sending": "📤 Envoi...",
         "not_found": "❌ Aucun résultat trouvé.",
-        "too_long": "❌ Piste trop longue (max 20 min).",
+        "too_long": "❌ Piste trop longue (max 10 min).",
         "lyrics_not_found": "❌ Paroles introuvables.",
         "choose_lang": "🌍 Choisissez votre langue:",
         "lang_set": "✅ Langue définie sur Français 🇫🇷",
@@ -332,7 +334,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ Herunterladen...",
         "sending": "📤 Senden...",
         "not_found": "❌ Keine Ergebnisse gefunden.",
-        "too_long": "❌ Titel zu lang (max. 20 Min.).",
+        "too_long": "❌ Titel zu lang (max. 10 Min.).",
         "lyrics_not_found": "❌ Songtext nicht gefunden.",
         "choose_lang": "🌍 Wählen Sie Ihre Sprache:",
         "lang_set": "✅ Sprache auf Deutsch 🇩🇪 eingestellt",
@@ -357,7 +359,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ Baixando faixa...",
         "sending": "📤 Enviando...",
         "not_found": "❌ Nenhum resultado encontrado.",
-        "too_long": "❌ Faixa muito longa (máx. 20 min).",
+        "too_long": "❌ Faixa muito longa (máx. 10 min).",
         "lyrics_not_found": "❌ Letra não encontrada.",
         "choose_lang": "🌍 Escolha seu idioma:",
         "lang_set": "✅ Idioma definido para Português 🇵🇹",
@@ -382,7 +384,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ Скачивание...",
         "sending": "📤 Отправка...",
         "not_found": "❌ Результаты не найдены.",
-        "too_long": "❌ Трек слишком длинный (макс. 20 мин).",
+        "too_long": "❌ Трек слишком длинный (макс. 10 мин).",
         "lyrics_not_found": "❌ Текст не найден.",
         "choose_lang": "🌍 Выберите язык:",
         "lang_set": "✅ Язык установлен на Русский 🇷🇺",
@@ -407,7 +409,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ Yuklanmoqda...",
         "sending": "📤 Yuborilmoqda...",
         "not_found": "❌ Natija topilmadi.",
-        "too_long": "❌ Trek juda uzun (maks. 20 daqiqa).",
+        "too_long": "❌ Trek juda uzun (maks. 10 daqiqa).",
         "lyrics_not_found": "❌ Qo'shiq matni topilmadi.",
         "choose_lang": "🌍 Tilni tanlang:",
         "lang_set": "✅ Til O'zbek 🇺🇿 ga o'rnatildi",
@@ -432,7 +434,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ डाउनलोड हो रहा है...",
         "sending": "📤 भेज रहे हैं...",
         "not_found": "❌ कोई परिणाम नहीं मिला।",
-        "too_long": "❌ ट्रैक बहुत लंबा है (अधिकतम 20 मिनट)।",
+        "too_long": "❌ ट्रैक बहुत लंबा है (अधिकतम 10 मिनट)।",
         "lyrics_not_found": "❌ बोल नहीं मिले।",
         "choose_lang": "🌍 अपनी भाषा चुनें:",
         "lang_set": "✅ भाषा हिन्दी 🇮🇳 पर सेट की गई",
@@ -457,7 +459,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ 下载中...",
         "sending": "📤 发送中...",
         "not_found": "❌ 未找到结果。",
-        "too_long": "❌ 曲目太长（最长20分钟）。",
+        "too_long": "❌ 曲目太长（最长10分钟）。",
         "lyrics_not_found": "❌ 未找到歌词。",
         "choose_lang": "🌍 选择您的语言:",
         "lang_set": "✅ 语言已设置为中文 🇨🇳",
@@ -482,7 +484,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "downloading": "⬇️ ダウンロード中...",
         "sending": "📤 送信中...",
         "not_found": "❌ 結果が見つかりません。",
-        "too_long": "❌ トラックが長すぎます（最大20分）。",
+        "too_long": "❌ トラックが長すぎます（最大10分）。",
         "lyrics_not_found": "❌ 歌詞が見つかりません。",
         "choose_lang": "🌍 言語を選択してください:",
         "lang_set": "✅ 言語が日本語 🇯🇵 に設定されました",
@@ -856,10 +858,11 @@ def t(user_id: int, key: str) -> str:
     return strings.get(key, LANGUAGES["en"].get(key, key))
 
 # ---------------------------------------------------------------------------
-# FIX 2: yt-dlp helpers — iOS client for YouTube bot detection bypass
+# Music search and yt-dlp helpers
 # ---------------------------------------------------------------------------
 
-MAX_TRACK_SECONDS = 1200
+MIN_TRACK_SECONDS = 1
+MAX_TRACK_SECONDS = 600
 
 EQ_FILTER = (
     "highpass=f=25,"
@@ -892,7 +895,87 @@ def _ydl_opts_base() -> dict:
     return opts
 
 
+def _valid_track_duration(duration: int) -> bool:
+    return MIN_TRACK_SECONDS <= duration <= MAX_TRACK_SECONDS
+
+
+def _search_ytmusic_songs(query: str, max_results: int) -> list[dict]:
+    """Search YouTube Music's song catalogue, never generic YouTube videos."""
+    session = requests.Session()
+    session.request = functools.partial(session.request, timeout=10)
+    rows = YTMusic(requests_session=session).search(
+        query, filter="songs", limit=max(20, max_results)
+    )
+    results: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        video_id = row.get("videoId") or ""
+        if len(video_id) != 11 or video_id in seen:
+            continue
+        try:
+            duration = int(row.get("duration_seconds") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not _valid_track_duration(duration):
+            continue
+        artists = ", ".join(
+            artist.get("name", "").strip()
+            for artist in (row.get("artists") or [])
+            if artist.get("name")
+        ) or "Unknown"
+        thumbnails = row.get("thumbnails") or []
+        thumbnail = thumbnails[-1].get("url", "") if thumbnails else (
+            f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
+        )
+        results.append({
+            "id": video_id,
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "title": row.get("title") or "Unknown",
+            "uploader": artists,
+            "duration": duration,
+            "thumbnail": thumbnail,
+            "source": "youtube_music",
+        })
+        seen.add(video_id)
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _search_soundcloud_tracks(query: str, max_results: int) -> list[dict]:
+    opts = {
+        **_ydl_opts_base(),
+        "extract_flat": True,
+        "skip_download": True,
+        "noplaylist": True,
+    }
+    results: list[dict] = []
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"scsearch{max_results}:{query}", download=False)
+    for entry in (info or {}).get("entries", []):
+        if not entry or not entry.get("url"):
+            continue
+        try:
+            duration = int(entry.get("duration") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not _valid_track_duration(duration):
+            continue
+        thumbnails = entry.get("thumbnails") or []
+        results.append({
+            "id": f"sc:{entry['id']}" if entry.get("id") else "",
+            "url": entry["url"],
+            "title": entry.get("title") or "Unknown",
+            "uploader": entry.get("uploader") or "Unknown",
+            "duration": duration,
+            "thumbnail": thumbnails[-1].get("url", "") if thumbnails else "",
+            "source": "soundcloud",
+        })
+    return results
+
+
 def search_youtube(query: str, max_results: int = SEARCH_POOL) -> list[dict]:
+    """Return actual songs from music catalogues, not generic YouTube videos."""
     cache_key = f"{query.strip().lower()}|{max_results}"
     now = time.time()
     with _search_cache_lock:
@@ -900,48 +983,19 @@ def search_youtube(query: str, max_results: int = SEARCH_POOL) -> list[dict]:
         if hit and now - hit["ts"] < SEARCH_CACHE_TTL:
             return hit["results"]
 
-    opts = {
-        **_ydl_opts_base(),
-        "extract_flat": True,
-        "skip_download": True,
-        "noplaylist": True,
-    }
-    results = []
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        try:
-            info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
-            for entry in info.get("entries", []):
-                if not entry or not entry.get("id"):
-                    continue
-                if len(entry["id"]) != 11:
-                    continue
-                results.append({
-                    "id": entry["id"],
-                    "url": f"https://www.youtube.com/watch?v={entry['id']}",
-                    "title": entry.get("title", "Unknown"),
-                    "uploader": entry.get("uploader") or entry.get("channel") or "Unknown",
-                    "duration": entry.get("duration") or 0,
-                    "thumbnail": f"https://i.ytimg.com/vi/{entry['id']}/mqdefault.jpg",
-                })
-        except Exception as exc:
-            log.warning("YouTube search failed: %s", exc)
+    results: list[dict] = []
+    try:
+        results = _search_ytmusic_songs(query, max_results)
+        log.info("YouTube Music returned %d songs for %r", len(results), query)
+    except Exception as exc:
+        log.warning("YouTube Music search failed: %s", exc)
 
-        if not results:
-            try:
-                sc = ydl.extract_info(f"scsearch15:{query}", download=False)
-                for entry in (sc or {}).get("entries", []):
-                    if not entry or not entry.get("url"):
-                        continue
-                    results.append({
-                        "id": f"sc:{entry['id']}" if entry.get("id") else "",
-                        "url": entry["url"],
-                        "title": entry.get("title", "Unknown"),
-                        "uploader": entry.get("uploader") or "Unknown",
-                        "duration": int(entry.get("duration") or 0),
-                        "thumbnail": (entry.get("thumbnails") or [{}])[-1].get("url", ""),
-                    })
-            except Exception as exc:
-                log.warning("SoundCloud fallback failed: %s", exc)
+    if not results:
+        try:
+            results = _search_soundcloud_tracks(query, min(max_results, 15))
+            log.info("SoundCloud returned %d tracks for %r", len(results), query)
+        except Exception as exc:
+            log.warning("SoundCloud fallback failed: %s", exc)
 
     if results:
         with _search_cache_lock:
@@ -1811,7 +1865,7 @@ def _recognize_and_reply(chat_id: int, uid: int, media_path: str, tmpdir: str,
         video_id = ""
         try:
             results = search_youtube(f"{artist} {title}", max_results=1)
-            if results:
+            if results and _VIDEO_ID_RE.fullmatch(results[0].get("id", "")):
                 video_id = results[0]["id"]
         except Exception as exc:
             log.error("shazam yt lookup error: %s", exc)
@@ -1983,10 +2037,14 @@ def send_audio_track(chat_id: int, video_url: str, user_id: int, video_id: str =
 
     status_msg = bot.send_message(chat_id, t(user_id, "downloading"))
     mp3_path, meta = download_audio(video_url)
-    if not mp3_path and meta.get("error") != "too_long" and fallback_query:
-        alt = "ytsearch1" if "soundcloud.com" in video_url else "scsearch1"
-        log.info("Download fallback via %s for: %s", alt, fallback_query)
-        mp3_path, meta = download_audio(f"{alt}:{fallback_query}")
+    if (
+        not mp3_path
+        and meta.get("error") != "too_long"
+        and fallback_query
+        and "soundcloud.com" not in video_url
+    ):
+        log.info("Download fallback via SoundCloud for: %s", fallback_query)
+        mp3_path, meta = download_audio(f"scsearch1:{fallback_query}")
     if mp3_path and video_id:
         meta["video_id"] = video_id
     if not mp3_path:
@@ -2428,7 +2486,22 @@ def handle_url(message: types.Message):
         if not query:
             bot.send_message(message.chat.id, t(uid, "not_found"))
             return
-        start_download(message.chat.id, f"ytsearch1:{query}", uid, fallback_query=query)
+        try:
+            tracks = search_youtube(query, max_results=1)
+        except Exception as exc:
+            log.error("Spotify music lookup failed: %s", exc)
+            tracks = []
+        if not tracks:
+            bot.send_message(message.chat.id, t(uid, "not_found"))
+            return
+        track = tracks[0]
+        start_download(
+            message.chat.id,
+            track["url"],
+            uid,
+            track["id"],
+            fallback_query=clean_title(track["title"], track["uploader"]),
+        )
         return
     yt_match = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", url)
     video_id = yt_match.group(1) if yt_match else ""
