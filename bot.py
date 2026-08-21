@@ -45,21 +45,24 @@ lang_cache: dict[int, str] = {}
 BTN_PREV, BTN_CLOSE, BTN_NEXT = "⬅️", "❌", "➡️"
 
 # ---------------------------------------------------------------------------
-# FIX 1: YouTube bot detection bypass (2025-2026)
+# YouTube extraction (2026)
 # ---------------------------------------------------------------------------
-# YouTube now requires PO token / newer client. Using "ios" client is the
-# most reliable way to bypass bot detection without cookies in 2025-2026.
-# Fallback chain: ios → web_embedded → mweb → tv_embedded
+# YouTube regularly changes its player challenge.  The embedded clients avoid
+# needing a per-request PO token in most cases, while yt-dlp-ejs + Node solves
+# the current signature / n challenges.  Keep the client order explicit: iOS
+# is a useful fallback when the web clients are rate limited.
 YDL_EXTRACTOR_ARGS = {
     "extractor_args": {
         "youtube": {
-            "player_client": ["ios", "web_embedded", "mweb"],
+            "player_client": ["web_embedded", "mweb", "ios"],
             "player_skip": [],
         }
     }
 }
 
-# Legacy JS runtimes kept as secondary fallback
+# yt-dlp only uses this when it is included in the options passed to
+# YoutubeDL.  Node is present in the Replit runtime and yt-dlp-ejs, installed
+# through requirements.txt, provides the challenge solver distribution.
 YDL_JS_RUNTIMES = {"js_runtimes": {"node": {}}}
 
 # ---------------------------------------------------------------------------
@@ -820,12 +823,13 @@ SEARCH_CACHE_MAX = 500
 
 
 def _ydl_opts_base() -> dict:
-    """Base yt-dlp options with iOS client to bypass YouTube bot detection."""
+    """Base yt-dlp options for YouTube search and audio extraction."""
     return {
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 15,
         **YDL_EXTRACTOR_ARGS,
+        **YDL_JS_RUNTIMES,
     }
 
 
